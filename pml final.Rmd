@@ -1,0 +1,53 @@
+---
+title: 'Practical Machine Learning Final: Weight Lifting Exercise Dataset'
+author: "Steven Vasquez-Grinnell"
+date: "April 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(plyr) ## used by xgboost, must be loaded first!
+library(dplyr)
+library(dtplyr)
+library(caret)
+```
+##Executive Summary
+Using the Human Activity Recognition dataset, we trained a model to classify whether a particular excercise was being performed correctly or incorrectly by an inexperienced participant, with 5 different possible outcomes. Using 5x repeated 10-fold crossvalidation, we estimate out-of-sample error to be less than 0.4%. Examining variable importance suggests that roll readings from the belt sensor were by far the most important predictor of exercise quality.
+
+##Training a model
+After loading the data, it is immediately apparent that some rows contain summary data and these are not going to be useful for our model. We can drop these and focus on the useful data.
+```{r load HAR training dataset and remove missing values}
+pml_train <- fread("pml-training.csv", na.strings = c("", "#DIV/0!","NA"))
+
+drop_me <- which(sapply(pml_train[1],is.na))
+pml_train[,(c(1:7,drop_me)):=NULL]
+```
+
+I played around with preprocessing the data using principle components analysis but to my initial surprise, feeding XGBoost the raw data gives better performance AND takes less time. In retrospect, this makes sense because XGBoost has feature selection built in, so we should let the algorithm select which features are most useful rather than creating artificial features which are all orthogonal. 
+
+Importantly, to give a good estimate of our bias/variance we should perform repeated crossvalidation. Max Kuhn, the author of the caret package, has shown that 5x repeated 10-fold crossvalidation gives nearly ideal estimation of model bias/variance. This is computationally expensive, but I ran this on an Amazon EC2 instance (r4.8xlarge type which seems to offer the best value) so the actual amount of time taken was not excessive.
+
+```{r set cross-validation preferences and train model using xgboost}
+pml_model <- train(classe ~ .,
+                  data = pml_train, 
+                  method = "xgbTree", 
+                  na.action = na.pass, 
+                  trControl = trainControl(method="repeatedcv", number=10, repeats = 5))
+```
+
+```{r assess model fit}
+confusionMatrix(pml_model)
+```
+
+```{r plot variable importance}
+ggplot(varImp(pml_model), top = 12)
+```
+
+```{r run on testing set}
+pml_testing <- fread("pml-testing.csv", na.strings = c("", "#DIV/0!","NA"))
+pml_testing[,(c(1:7,drop_me)):=NULL]
+testing_predictions <- predict(pml_model,pml_testing)
+
+testing_predictions
+```
